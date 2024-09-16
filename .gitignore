@@ -1,0 +1,28 @@
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Log files
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+
+
+# Ignore specific large files
+out/make/squirrel.windows/x64/electron_file_reader-1.0.0-full.nupkg
+out/make/squirrel.windows/x64/snaarp-1.0.0 Setup.exe
+
+# Ignore all files in certain directories (e.g., 'out/')
+out/
+
+# Optionally, you can use wildcards to ignore all files of a specific type (e.g., .exe)
+*.exe
+*.nupkg

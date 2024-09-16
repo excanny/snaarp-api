@@ -1,0 +1,242 @@
+//renderer.js
+
+let mediaRecorder;
+let recordedChunks = [];
+let userHomeDir;
+
+document.addEventListener('DOMContentLoaded', () => {
+  const videoElement = document.querySelector('video');
+  const statusMsg = document.getElementById('statusMsg');
+
+  window.electron.onUserHomeDir((dir) => {
+    userHomeDir = dir;
+  });
+
+  window.electron.onRecordingStatus((status) => {
+    if (status === 'start') {
+      startRecording();
+    }
+  });
+
+  async function startRecording() {
+    try {
+      statusMsg.textContent = 'Getting screen source...';
+      const source = await window.electron.startRecording();
+      
+      if (!source) {
+        throw new Error('No screen source available');
+      }
+
+      statusMsg.textContent = 'Accessing media stream...';
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: source.id,
+            minWidth: 1280,
+            maxWidth: 1280,
+            minHeight: 720,
+            maxHeight: 720
+          }
+        }
+      });
+
+      videoElement.srcObject = stream;
+      videoElement.play();
+
+      const options = { mimeType: 'video/webm; codecs=vp9' };
+      mediaRecorder = new MediaRecorder(stream, options);
+
+      mediaRecorder.ondataavailable = handleDataAvailable;
+      mediaRecorder.onstop = handleStop;
+
+      mediaRecorder.start();
+   
+      statusMsg.textContent = 'Recording...';
+
+      // Stop recording after 1 minute
+      setTimeout(() => {
+        stopRecording();
+      }, 60000);
+
+    } catch (e) {
+      console.error('Error starting recording:', e);
+      statusMsg.textContent = `Error: ${e.message}`;
+    }
+  }
+
+  function stopRecording() {
+    mediaRecorder.stop();
+    statusMsg.textContent = 'Stopped recording. Preparing file...';
+  }
+
+  function handleDataAvailable(e) {
+    recordedChunks.push(e.data);
+  }
+
+  async function handleStop() {
+    const blob = new Blob(recordedChunks, {
+      type: 'video/webm; codecs=vp9'
+    });
+
+    // Construct the file path to save the video on Desktop
+    const filePath = path.join(userHomeDir, 'Desktop', 'Saved Screen recordings', `vid-${Date.now()}.webm`);
+
+    // Display status message
+    statusMsg.textContent = 'Saving file...';
+
+    // Convert blob to array buffer
+    const arrayBuffer = await blob.arrayBuffer();
+    const blobParts = [new Uint8Array(arrayBuffer)];
+
+    // Invoke the saveVideo function through ipcRenderer
+    const success = await window.electron.saveVideo(filePath, blobParts, blob.type);
+
+    if (success) {
+      console.log('Video saved successfully');
+      statusMsg.textContent = 'Video saved successfully.';
+    } else {
+      console.error('Failed to save video');
+      statusMsg.textContent = 'Failed to save video.';
+    }
+
+    // Clear recorded chunks
+    recordedChunks = [];
+  }
+});
+
+
+//main.js
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, globalShortcut  } = require('electron');
+const path = require('path');
+const fs = require('fs').promises;
+const chokidar = require('chokidar');
+const os = require('os');
+
+let mainWindow; // Define mainWindow globally
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true, // Enable context isolation for security
+      enableRemoteModule: false,
+      nodeIntegration: false,
+    },
+  });
+
+  mainWindow.loadFile('index.html');
+  //mainWindow.webContents.openDevTools();
+
+   // Send the user's home directory to the renderer process
+   mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.send('user-home-dir', os.homedir());
+  });
+}
+
+app.whenReady().then(() => {
+  createWindow();
+
+
+  globalShortcut.register('CommandOrControl+C', () => {
+    console.log('Copy event detected');
+    mainWindow.webContents.send('recording-status', 'start'); 
+  });
+
+  globalShortcut.register('CommandOrControl+X', () => {
+    console.log('Cut event detected');
+    mainWindow.webContents.send('start-recording');
+
+  });
+
+  // globalShortcut.register('CommandOrControl+V', () => {
+  //   console.log('Paste event detected');
+  //   mainWindow.webContents.send('start-recording');
+  // })
+
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  //watcher.close(); 
+});
+
+
+ipcMain.handle('start-recording', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen'] });
+  return sources[0];
+});
+
+ipcMain.handle('save-video', async (event, filePath, blobParts, type) => {
+  try {
+    const buffer = Buffer.concat(blobParts.map(part => Buffer.from(part)));
+    fs.writeFileSync(filePath, buffer);
+    return true;
+  } catch (error) {
+    console.error('Error saving video:', error);
+    return false;
+  }
+});
+
+
+// // Watcher configuration
+// const watchPaths = [
+//   'C:/', // Root directory on Windows
+//   // 'C:/Users/', // User directory on Windows
+//   // 'D:/', // Additional drives on Windows
+//   // '/', // Root directory on Unix-based systems
+// ];
+
+// const watcher = chokidar.watch(watchPaths, {
+//   persistent: true,
+//   ignoreInitial: true, 
+//   depth: 0, 
+//   ignored: [
+//     /(^|[\/\\])\../,          // Ignore dotfiles
+//     'C:/DumpStack.log.tmp',   // Ignore specific file
+//     '**/node_modules',        // Ignore node_modules directories
+//     '**/*.log',               // Ignore all .log files if necessary
+//   ],
+// });
+
+// watcher
+//   .on('add', filePath => console.log(`File added: ${filePath}`))
+//   .on('unlink', filePath => console.log(`File removed: ${filePath}`))
+//   .on('addDir', dirPath => console.log(`Directory added: ${dirPath}`))
+//   .on('unlinkDir', dirPath => console.log(`Directory removed: ${dirPath}`))
+//   .on('change', filePath => console.log(`File changed: ${filePath}`))
+//   .on('rename', filePath => console.log(`File or Directory renamed: ${filePath}`)) // `rename` event isn't natively supported by chokidar, instead use `add` + `unlink` detection
+//   .on('error', error => {
+//     if (error.code === 'EBUSY') {
+//       console.log(`Ignoring EBUSY error for file: ${error.path}`);
+//     } else {
+//       console.error(`Watcher error: ${error.message}`);
+//     }
+//   });
+
+
+//preload.js
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electron', {
+  startRecording: () => ipcRenderer.invoke('start-recording'),
+  saveVideo: (filePath, blobParts, type) => ipcRenderer.invoke('save-video', filePath, blobParts, type),
+  onRecordingStatus: (callback) => ipcRenderer.on('recording-status', (event, status) => callback(status)),
+  onUserHomeDir: (callback) => ipcRenderer.on('user-home-dir', (event, dir) => callback(dir))
+});
