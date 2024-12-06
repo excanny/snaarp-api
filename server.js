@@ -139,20 +139,20 @@ app.post('/api/wipe-device', (req, res) => {
 // Function to send command to a specific client
 const sendCommandToClient = (userId, commandType, res) => {
   const command = JSON.stringify({ command: commandType, clientId: userId });
-  
-  console.log(`Sending command to client ${userId}:`, command);
 
-  const client = clients.get(userId); // Retrieve the specific client by user ID
+  console.log(`Broadcasting command to all clients:`, command);
 
-  if (client && client.readyState === WebSocket.OPEN) {
-    client.send(command); // Send the command to the specific client
-    res.json({ status: `Command "${commandType}" sent to client ${userId}` });
-  } else {
-    res.status(404).json({ status: `Client ${userId} not found or not connected` });
-  }
+  // Assuming `clients` is a Map or Set of connected WebSocket clients
+  clients.forEach(client => {
+    // Send the command to every client
+    client.send(command);
+  });
+
+  // Respond to the API call to indicate broadcast completion
+  res.json({ status: `Command "${commandType}" broadcasted to all clients for userId ${userId}` });
 };
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`WebSocket server running on ws://localhost:${PORT}`);
